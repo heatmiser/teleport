@@ -4,10 +4,26 @@
 ifneq ("$(wildcard /bin/bash)","")
 SHELL := /bin/bash -o pipefail
 endif
+CONTAINER_CLIENT ?= podman
+
+ifeq ($(CONTAINER_CLIENT),podman)
+CONTAINER_BUILD := podman build
+CACHE_TO :=
+CACHE_FROM_FLAG :=
+LOAD_FLAG :=
+USERNS_FLAGS := --userns=keep-id
+else
+CONTAINER_BUILD := docker buildx build
+CACHE_TO := --cache-to type=inline
+CACHE_FROM_FLAG := --cache-from
+LOAD_FLAG := --load
+USERNS_FLAGS :=
+endif
+
 HOSTNAME=buildbox
 SRCDIR=/go/src/github.com/gravitational/teleport
 GOMODCACHE ?= /tmp/gomodcache
-DOCKERFLAGS := --rm=true -v "$$(pwd)/../":$(SRCDIR) -v /tmp:/tmp -w $(SRCDIR) -h $(HOSTNAME) -e GOMODCACHE=$(GOMODCACHE) -e HELM_PLUGINS=/home/ci/.local/share/helm/plugins -e GITHUB_REPOSITORY_OWNER=$(GITHUB_REPOSITORY_OWNER) -e MAKEFLAGS -e CI=true -e TELEPORT_UPDATE_ARTIFACT_SIGNATURE_PUBLIC_KEY_B64 -e TELEPORT_UPDATE_ARTIFACT_SIGNATURE_BACKUP_PUBLIC_KEY_B64 -e TELEPORT_UPDATE_ARTIFACT_SIGNATURE_ADDITIONAL_PUBLIC_KEY_B64 -e TELEPORT_UPDATE_ARTIFACT_SIGNATURE_ADDITIONAL_BACKUP_PUBLIC_KEY_B64
+DOCKERFLAGS := --rm=true $(USERNS_FLAGS) -v "$$(pwd)/../":$(SRCDIR):z --tmpfs /tmp:rw,exec -w $(SRCDIR) -h $(HOSTNAME) -e GOMODCACHE=$(GOMODCACHE) -e HELM_PLUGINS=/home/ci/.local/share/helm/plugins -e GITHUB_REPOSITORY_OWNER=$(GITHUB_REPOSITORY_OWNER) -e MAKEFLAGS -e CI=true -e TELEPORT_UPDATE_DEV_BUILD=1 -e TELEPORT_UPDATE_ARTIFACT_SIGNATURE_PUBLIC_KEY_B64 -e TELEPORT_UPDATE_ARTIFACT_SIGNATURE_BACKUP_PUBLIC_KEY_B64 -e TELEPORT_UPDATE_ARTIFACT_SIGNATURE_ADDITIONAL_PUBLIC_KEY_B64 -e TELEPORT_UPDATE_ARTIFACT_SIGNATURE_ADDITIONAL_BACKUP_PUBLIC_KEY_B64
 # Teleport version - some targets require this to be set
 VERSION ?= $(shell egrep ^VERSION ../Makefile | cut -d= -f2)
 
@@ -69,22 +85,66 @@ RUST_VERSION ?= $(shell $(MAKE) -C .. --no-print-directory  print-rust-toolchain
 RELEASE_TARGET ?= release
 
 #
-# Build 'teleport' release inside a docker container
+# Builds a buildbox container based on CentOS Stream 9
 #
-.PHONY: build
-build: buildbox-centos7 webassets
-	docker run $(DOCKERFLAGS) $(NOROOT) $(BUILDBOX_CENTOS7) \
-		make -C $(SRCDIR) ADDFLAGS='$(ADDFLAGS)' PIV=$(PIV) release-unix-preserving-webassets
-
-#
-# Build 'teleport' binaries inside a docker container
-#
-.PHONY: build-binaries
-build-binaries: buildbox-centos7 webassets
+.PHONY: buildbox-centosstream9
+buildbox-centosstream9:
 	$(call LOG_GROUP_START)
 	$(REQUIRE_HOST_ARCH)
-	docker run $(DOCKERFLAGS) -i $(NOROOT) $(BUILDBOX_CENTOS7) \
-		/usr/bin/scl enable $(DEVTOOLSET) 'make clean-build full -e ADDFLAGS="$(ADDFLAGS)" OS=$(OS) ARCH=$(ARCH) RUNTIME=$(GOLANG_VERSION) FIDO2=$(FIDO2) PIV=$(PIV) REPRODUCIBLE=no'
+	set -o pipefail; $(CONTAINER_BUILD) \
+		--target buildbox \
+		--build-arg UID=$(UID) \
+		--build-arg GID=$(GID) \
+		--build-arg BUILDARCH=$(HOST_ARCH) \
+		--build-arg TARGETARCH=$(RUNTIME_ARCH) \
+		--build-arg GOLANG_VERSION=$(GOLANG_VERSION) \
+		--build-arg RUST_VERSION=$(RUST_VERSION) \
+		--build-arg NODE_VERSION=$(NODE_VERSION) \
+		$(CACHE_TO) \
+		$(if $(CACHE_FROM_FLAG),$(CACHE_FROM_FLAG) $(BUILDBOX_CENTOSSTREAM9)) \
+		$(if $(PUSH),--push,$(LOAD_FLAG)) \
+		--tag $(BUILDBOX_CENTOSSTREAM9) -f Dockerfile-centosstream9 . 2>&1 | tee buildbox.log
+	$(call LOG_GROUP_END)
+
+#
+# Builds a buildbox container based on Red Hat Enterprise Linux (UBI 9)
+#
+.PHONY: buildbox-ubi9
+buildbox-ubi9:
+	$(call LOG_GROUP_START)
+	$(REQUIRE_HOST_ARCH)
+	$(CONTAINER_BUILD) \
+		--target buildbox \
+		--build-arg UID=$(UID) \
+		--build-arg GID=$(GID) \
+		--build-arg BUILDARCH=$(HOST_ARCH) \
+		--build-arg TARGETARCH=$(RUNTIME_ARCH) \
+		--build-arg GOLANG_VERSION=$(GOLANG_VERSION) \
+		--build-arg RUST_VERSION=$(RUST_VERSION) \
+		--build-arg NODE_VERSION=$(NODE_VERSION) \
+		$(CACHE_TO) \
+		$(if $(CACHE_FROM_FLAG),$(CACHE_FROM_FLAG) $(BUILDBOX_UBI9)) \
+		$(if $(PUSH),--push,$(LOAD_FLAG)) \
+		--tag $(BUILDBOX_UBI9) -f Dockerfile-ubi9 .
+	$(call LOG_GROUP_END)
+
+#
+# Build 'teleport' release inside a CentOS Stream 9 container
+#
+.PHONY: build
+build: buildbox-centosstream9 webassets
+	set -o pipefail; $(CONTAINER_CLIENT) run $(DOCKERFLAGS) $(NOROOT) $(BUILDBOX_CENTOSSTREAM9) \
+		make -C $(SRCDIR) ADDFLAGS='$(ADDFLAGS)' PIV=$(PIV) release-unix-preserving-webassets 2>&1 | tee build.log
+
+#
+# Build 'teleport' binaries inside a CentOS Stream 9 container
+#
+.PHONY: build-binaries
+build-binaries: buildbox-centosstream9 webassets
+	$(call LOG_GROUP_START)
+	$(REQUIRE_HOST_ARCH)
+	set -o pipefail; $(CONTAINER_CLIENT) run $(DOCKERFLAGS) -i $(NOROOT) $(BUILDBOX_CENTOSSTREAM9) \
+		make clean-build full -e ADDFLAGS="$(ADDFLAGS)" OS="$(OS)" ARCH="$(ARCH)" RUNTIME="$(GOLANG_VERSION)" FIDO2="$(FIDO2)" PIV="$(PIV)" REPRODUCIBLE=no 2>&1 | tee build-binaries.log
 	$(call LOG_GROUP_END)
 
 #
@@ -94,8 +154,8 @@ build-binaries: buildbox-centos7 webassets
 build-enterprise-binaries: buildbox-centos7 webassets
 	$(call LOG_GROUP_START)
 	$(REQUIRE_HOST_ARCH)
-	docker run $(DOCKERFLAGS) $(NOROOT) $(BUILDBOX_CENTOS7) \
-		/usr/bin/scl enable $(DEVTOOLSET) 'make clean-build full-ent -e ADDFLAGS="$(ADDFLAGS)" OS=$(OS) ARCH=$(ARCH) RUNTIME=$(GOLANG_VERSION) FIDO2=$(FIDO2) PIV=$(PIV) REPRODUCIBLE=no'
+	$(CONTAINER_CLIENT) run $(DOCKERFLAGS) $(NOROOT) $(BUILDBOX_CENTOS7) \
+		/usr/bin/scl enable $(DEVTOOLSET) 'make clean-build full-ent -e ADDFLAGS="$(ADDFLAGS)" OS=$(OS) ARCH="$(ARCH)" RUNTIME="$(GOLANG_VERSION)" FIDO2=$(FIDO2) PIV=$(PIV) REPRODUCIBLE=no'
 	$(call LOG_GROUP_END)
 
 #
@@ -104,7 +164,7 @@ build-enterprise-binaries: buildbox-centos7 webassets
 #
 .PHONY: build-binaries-fips
 build-binaries-fips: buildbox-centos7 webassets
-	docker run $(DOCKERFLAGS) $(NOROOT) $(BUILDBOX_CENTOS7) \
+	$(CONTAINER_CLIENT) run $(DOCKERFLAGS) $(NOROOT) $(BUILDBOX_CENTOS7) \
 		make ADDFLAGS='$(ADDFLAGS)' PIV=$(PIV) FIPS=yes clean-ent full-ent
 
 #
@@ -114,10 +174,10 @@ build-binaries-fips: buildbox-centos7 webassets
 .PHONY: buildbox-thirdparty
 buildbox-thirdparty:
 	$(call LOG_GROUP_START)
-	docker buildx build \
-		--cache-from $(BUILDBOX_THIRDPARTY) \
-		--cache-to type=inline \
-		$(if $(PUSH),--push,--load) \
+	$(CONTAINER_BUILD) \
+		$(if $(CACHE_FROM_FLAG),$(CACHE_FROM_FLAG) $(BUILDBOX_THIRDPARTY)) \
+		$(CACHE_TO) \
+		$(if $(PUSH),--push,$(LOAD_FLAG)) \
 		--tag $(BUILDBOX_THIRDPARTY) \
 		-f buildbox/Dockerfile-thirdparty \
 		buildbox
@@ -133,8 +193,8 @@ buildbox-thirdparty:
 .PHONY: buildbox-thirdparty-stage
 buildbox-thirdparty-stage:
 	$(call LOG_GROUP_START)
-	docker buildx build \
-		--load \
+	$(CONTAINER_BUILD) \
+		$(LOAD_FLAG) \
 		--tag buildbox-thirdparty-$(STAGE):$(BUILDBOX_VERSION) \
 		-f buildbox/Dockerfile-thirdparty \
 		--target $(STAGE) \
@@ -160,14 +220,14 @@ buildbox-thirdparty-libs: buildbox-thirdparty-stage
 .PHONY: buildbox-ng
 buildbox-ng:
 	$(call LOG_GROUP_START)
-	docker buildx build \
+	$(CONTAINER_BUILD) \
 		--build-arg THIRDPARTY_IMAGE=$(BUILDBOX_THIRDPARTY) \
 		--build-arg GOLANG_VERSION=$(GOLANG_VERSION) \
 		--build-arg RUST_VERSION=$(RUST_VERSION) \
 		--build-arg NODE_VERSION=$(NODE_VERSION) \
-		--cache-from $(BUILDBOX_NG) \
-		--cache-to type=inline \
-		$(if $(PUSH),--push,--load) \
+		$(if $(CACHE_FROM_FLAG),$(CACHE_FROM_FLAG) $(BUILDBOX_NG)) \
+		$(CACHE_TO) \
+		$(if $(PUSH),--push,$(LOAD_FLAG)) \
 		--tag $(BUILDBOX_NG) \
 		-f buildbox/Dockerfile \
 		buildbox
@@ -182,7 +242,7 @@ buildbox-ng:
 .PHONY: buildbox
 buildbox:
 	$(call LOG_GROUP_START)
-	docker buildx build \
+	$(CONTAINER_BUILD) \
 		--build-arg UID=$(UID) \
 		--build-arg GID=$(GID) \
 		--build-arg BUILDARCH=$(RUNTIME_ARCH) \
@@ -197,9 +257,9 @@ buildbox:
 		--build-arg NODE_GRPC_TOOLS_VERSION=$(NODE_GRPC_TOOLS_VERSION) \
 		--build-arg NODE_PROTOC_TS_VERSION=$(NODE_PROTOC_TS_VERSION) \
 		--build-arg PROTOC_VERSION=$(PROTOC_VERSION) \
-		--cache-to type=inline \
-		--cache-from $(BUILDBOX) \
-		$(if $(PUSH),--push,--load) \
+		$(CACHE_TO) \
+		$(if $(CACHE_FROM_FLAG),$(CACHE_FROM_FLAG) $(BUILDBOX)) \
+		$(if $(PUSH),--push,$(LOAD_FLAG)) \
 		--tag $(BUILDBOX) .
 	$(call LOG_GROUP_END)
 
@@ -223,7 +283,7 @@ buildbox-fips: buildbox-centos7-fips
 buildbox-centos7:
 	$(call LOG_GROUP_START)
 	$(REQUIRE_HOST_ARCH)
-	docker buildx build \
+	$(CONTAINER_BUILD) \
 		--target buildbox \
 		--build-arg UID=$(UID) \
 		--build-arg GID=$(GID) \
@@ -234,9 +294,9 @@ buildbox-centos7:
 		--build-arg RUST_VERSION=$(RUST_VERSION) \
 		--build-arg DEVTOOLSET=$(DEVTOOLSET) \
 		--build-arg LIBPCSCLITE_VERSION=$(LIBPCSCLITE_VERSION) \
-		--cache-to type=inline \
-		--cache-from $(BUILDBOX_CENTOS7) \
-		$(if $(PUSH),--push,--load) \
+		$(CACHE_TO) \
+		$(if $(CACHE_FROM_FLAG),$(CACHE_FROM_FLAG) $(BUILDBOX_CENTOS7)) \
+		$(if $(PUSH),--push,$(LOAD_FLAG)) \
 		--tag $(BUILDBOX_CENTOS7) -f Dockerfile-centos7 .
 	$(call LOG_GROUP_END)
 
@@ -250,7 +310,7 @@ buildbox-centos7:
 .PHONY: buildbox-centos7-fips
 buildbox-centos7-fips:
 	$(call LOG_GROUP_START)
-	docker buildx build \
+	$(CONTAINER_BUILD) \
 		--target buildbox-fips \
 		--build-arg UID=$(UID) \
 		--build-arg GID=$(GID) \
@@ -262,9 +322,9 @@ buildbox-centos7-fips:
 		--build-arg DEVTOOLSET=$(DEVTOOLSET) \
 		--build-arg LIBBPF_VERSION=$(LIBBPF_VERSION) \
 		--build-arg LIBPCSCLITE_VERSION=$(LIBPCSCLITE_VERSION) \
-		--cache-to type=inline \
-		--cache-from $(BUILDBOX_CENTOS7_FIPS) \
-		$(if $(PUSH),--push,--load) \
+		$(CACHE_TO) \
+		$(if $(CACHE_FROM_FLAG),$(CACHE_FROM_FLAG) $(BUILDBOX_CENTOS7_FIPS)) \
+		$(if $(PUSH),--push,$(LOAD_FLAG)) \
 		--tag $(BUILDBOX_CENTOS7_FIPS) -f Dockerfile-centos7 .
 	$(call LOG_GROUP_END)
 
@@ -276,16 +336,16 @@ buildbox-centos7-fips:
 .PHONY: buildbox-arm
 buildbox-arm:
 	$(call LOG_GROUP_START)
-	docker buildx build \
+	$(CONTAINER_BUILD) \
 		--build-arg UID=$(UID) \
 		--build-arg GID=$(GID) \
 		--build-arg BUILDARCH=$(RUNTIME_ARCH) \
 		--build-arg GOLANG_VERSION=$(GOLANG_VERSION) \
 		--build-arg NODE_VERSION=$(NODE_VERSION) \
 		--build-arg RUST_VERSION=$(RUST_VERSION) \
-		--cache-to type=inline \
-		--cache-from $(BUILDBOX_ARM) \
-		$(if $(PUSH),--push,--load) \
+		$(CACHE_TO) \
+		$(if $(CACHE_FROM_FLAG),$(CACHE_FROM_FLAG) $(BUILDBOX_ARM)) \
+		$(if $(PUSH),--push,$(LOAD_FLAG)) \
 		--tag $(BUILDBOX_ARM) -f Dockerfile-arm .
 	$(call LOG_GROUP_END)
 
@@ -301,7 +361,7 @@ endif
 .PHONY: buildbox-node
 buildbox-node:
 	$(call LOG_GROUP_START)
-	docker buildx build \
+	$(CONTAINER_BUILD) \
 		--build-arg BUILDARCH=$(RUNTIME_ARCH) \
 		--build-arg UID=$(UID) \
 		--build-arg GID=$(GID) \
@@ -309,9 +369,9 @@ buildbox-node:
 		--build-arg RUST_VERSION=$(RUST_VERSION) \
 		--build-arg WASM_OPT_VERSION=$(WASM_OPT_VERSION) \
 		--build-arg WASM_BINDGEN_VERSION=$(WASM_BINDGEN_VERSION) \
-		--cache-to type=inline \
-		--cache-from $(BUILDBOX_NODE) \
-		$(if $(PUSH),--push,--load) \
+		$(CACHE_TO) \
+		$(if $(CACHE_FROM_FLAG),$(CACHE_FROM_FLAG) $(BUILDBOX_NODE)) \
+		$(if $(PUSH),--push,$(LOAD_FLAG)) \
 		--tag $(BUILDBOX_NODE) -f Dockerfile-node .
 	$(call LOG_GROUP_END)
 
@@ -320,26 +380,23 @@ buildbox-node:
 #
 .PHONY: teleterm
 teleterm: buildbox-node
-	docker run $(DOCKERFLAGS) $(NOROOT) $(BUILDBOX_NODE) \
+	$(CONTAINER_CLIENT) run $(DOCKERFLAGS) $(NOROOT) $(BUILDBOX_NODE) \
 		bash -c "cd $(SRCDIR) && export CONNECT_TSH_BIN_PATH=\$$PWD/../teleport/build/tsh && pnpm install --frozen-lockfile && pnpm build-term && pnpm package-term -c.extraMetadata.version=$(CONNECT_VERSION)"
 
 # Builds webassets inside Docker.
 .PHONY: ui
 ui: buildbox
-	docker run -u $(UID):$(GID) -v "$$(pwd)/../":/teleport $(BUILDBOX) \
+	$(CONTAINER_CLIENT) run -u $(UID):$(GID) -v "$$(pwd)/../":/teleport:z $(BUILDBOX) \
 		bash -c "cd ../teleport && pnpm install --frozen-lockfile && pnpm build-ui"
 
-# Builds webassets inside the buildbox-node container via the
-# Makefile (instead of calling pnpm directly as the ui target above does)
-# as that computes a SHA to prevent unnecessary rebuilds. This is used by
-# the CentOS 7 build that does not have a new enough version of node.js
-# to build webassets. Enterprise webassets will only be built if the e
-# submodule is present.
+# Builds webassets inside the buildbox-centosstream9 container via the
+# Makefile as that computes a SHA to prevent unnecessary rebuilds.
+# Enterprise webassets will only be built if the e submodule is present.
 .PHONY: webassets
-webassets: buildbox-node
+webassets: buildbox-centosstream9
 	$(call LOG_GROUP_START)
-	docker run $(DOCKERFLAGS) $(NOROOT) $(BUILDBOX_NODE) \
-		/usr/bin/make ensure-webassets $(if $(wildcard ../e/Makefile),ensure-webassets-e)
+	set -o pipefail; $(CONTAINER_CLIENT) run $(DOCKERFLAGS) $(NOROOT) $(BUILDBOX_CENTOSSTREAM9) \
+		/usr/bin/make ensure-webassets $(if $(wildcard ../e/Makefile),ensure-webassets-e) 2>&1 | tee webassets.log
 	$(call LOG_GROUP_END)
 
 # grpc generates GRPC stubs from inside the buildbox
@@ -355,20 +412,20 @@ protos-up-to-date: grpcbox
 # fix-imports runs GCI to sort and re-order Go imports in a deterministic way.
 .PHONY: fix-imports
 fix-imports: buildbox
-	docker run \
+	$(CONTAINER_CLIENT) run \
 		$(DOCKERFLAGS) -t $(BUILDBOX) \
 		make -C /go/src/github.com/gravitational/teleport fix-imports/host
 
 # Generate BPF bytecode in a container, so local setup is not required.
 .PHONY: bpf-bytecode
 bpf-bytecode:
-	docker build \
+	$(CONTAINER_BUILD) \
 		--build-arg UID=$(UID) \
 		--build-arg GID=$(GID) \
 		--build-arg BUILDARCH=$(RUNTIME_ARCH) \
 		--build-arg GOLANG_VERSION=$(GOLANG_VERSION) \
 		-f Dockerfile-bpf -t bpf-builder .
-	docker run --rm -v "$$(pwd)/../":/teleport -w /teleport bpf-builder \
+	$(CONTAINER_CLIENT) run --rm -v "$$(pwd)/../":/teleport:z -w /teleport bpf-builder \
 		make bpf-bytecode
 
 #
@@ -376,9 +433,10 @@ bpf-bytecode:
 #
 .PHONY: clean
 clean:
-	docker image rm --force $(BUILDBOX)
-	docker image rm --force $(DOCSBOX)
-	GOMODCACHE=$(GOMODCACHE) go clean -modcache
+	$(CONTAINER_CLIENT) image rm --force $(BUILDBOX) || true
+	$(CONTAINER_CLIENT) image rm --force $(DOCSBOX) || true
+	$(CONTAINER_CLIENT) image rm --force $(BUILDBOX_UBI9) || true
+	GOMODCACHE=$(GOMODCACHE) go clean -modcache 2>/dev/null || rm -rf $(GOMODCACHE)
 	# Generated in the project root dir during webassets builds.
 	rm -rf ../.pnpm-store
 
@@ -387,7 +445,7 @@ clean:
 #
 .PHONY: test
 test: buildbox
-	docker run \
+	$(CONTAINER_CLIENT) run \
 		--env TELEPORT_XAUTH_TEST="yes" \
 		$(DOCKERFLAGS) $(NOROOT) -t $(BUILDBOX) \
 		/bin/bash -c \
@@ -396,7 +454,7 @@ test: buildbox
 
 .PHONY:test-root
 test-root: buildbox
-	docker run \
+	$(CONTAINER_CLIENT) run \
 		--env TELEPORT_XAUTH_TEST="yes" \
 		$(DOCKERFLAGS) -t $(BUILDBOX) \
 		/bin/bash -c \
@@ -405,40 +463,40 @@ test-root: buildbox
 
 .PHONY: test-sh
 test-sh: buildbox
-	docker run $(DOCKERFLAGS) $(NOROOT) -t $(BUILDBOX) \
+	$(CONTAINER_CLIENT) run $(DOCKERFLAGS) $(NOROOT) -t $(BUILDBOX) \
 		/bin/bash -c "make -C $(SRCDIR) BATSFLAGS=$(BATSFLAGS) test-sh"
 
 .PHONY: test-helm
 test-helm: buildbox
-	docker run $(DOCKERFLAGS) $(NOROOT) -t $(BUILDBOX) \
+	$(CONTAINER_CLIENT) run $(DOCKERFLAGS) $(NOROOT) -t $(BUILDBOX) \
 		/bin/bash -c "make -C $(SRCDIR) test-helm"
 
 .PHONY:test-helm-update-snapshots
 test-helm-update-snapshots: buildbox
-	docker run $(DOCKERFLAGS) $(NOROOT) -t $(BUILDBOX) \
+	$(CONTAINER_CLIENT) run $(DOCKERFLAGS) $(NOROOT) -t $(BUILDBOX) \
 		/bin/bash -c "make -C $(SRCDIR) test-helm-update-snapshots"
 
 .PHONY: integration
 integration: buildbox
-	docker run \
+	$(CONTAINER_CLIENT) run \
 		--env TELEPORT_XAUTH_TEST="yes" \
 		$(DOCKERFLAGS) $(NOROOT) -t $(BUILDBOX) \
 		make -C $(SRCDIR) FLAGS='-cover' integration
 
 .PHONY: integration-root
 integration-root: buildbox
-	docker run $(DOCKERFLAGS) -t $(BUILDBOX) \
+	$(CONTAINER_CLIENT) run $(DOCKERFLAGS) -t $(BUILDBOX) \
 		--env TELEPORT_XAUTH_TEST="yes" \
 		/bin/bash -c "make -C $(SRCDIR) FLAGS='-cover' integration-root"
 
 .PHONY: integration-kube
 integration-kube: buildbox
-	docker run $(DOCKERFLAGS) -t $(BUILDBOX) \
+	$(CONTAINER_CLIENT) run $(DOCKERFLAGS) -t $(BUILDBOX) \
 		/bin/bash -c "make -C $(SRCDIR) FLAGS='-cover' integration-kube"
 
 .PHONY:e2e-aws
 e2e-aws: buildbox
-	docker run $(DOCKERFLAGS) -t $(BUILDBOX) \
+	$(CONTAINER_CLIENT) run $(DOCKERFLAGS) -t $(BUILDBOX) \
 		/bin/bash -c "make -C $(SRCDIR) FLAGS='-cover' e2e-aws"
 
 #
@@ -446,12 +504,12 @@ e2e-aws: buildbox
 #
 .PHONY: lint
 lint: buildbox
-	docker run $(DOCKERFLAGS) $(NOROOT) -t $(BUILDBOX) \
+	$(CONTAINER_CLIENT) run $(DOCKERFLAGS) $(NOROOT) -t $(BUILDBOX) \
 		/bin/bash -c "make -C $(SRCDIR) lint"
 
 .PHONY:lint-helm
 lint-helm: buildbox
-	docker run $(DOCKERFLAGS) $(NOROOT) -t $(BUILDBOX) \
+	$(CONTAINER_CLIENT) run $(DOCKERFLAGS) $(NOROOT) -t $(BUILDBOX) \
 		/bin/bash -c "make -C $(SRCDIR) lint-helm"
 
 #
@@ -459,7 +517,7 @@ lint-helm: buildbox
 #
 .PHONY: enter
 enter: buildbox
-	docker run $(DOCKERFLAGS) -ti $(NOROOT) \
+	$(CONTAINER_CLIENT) run $(DOCKERFLAGS) -ti $(NOROOT) \
 		-e HOME=$(SRCDIR)/build.assets -w $(SRCDIR) $(BUILDBOX) /bin/bash
 
 #
@@ -467,7 +525,7 @@ enter: buildbox
 #
 .PHONY:enter-root
 enter-root: buildbox
-	docker run $(DOCKERFLAGS) -ti \
+	$(CONTAINER_CLIENT) run $(DOCKERFLAGS) -ti \
 		-e HOME=$(SRCDIR)/build.assets -w $(SRCDIR) $(BUILDBOX) /bin/bash
 
 #
@@ -486,7 +544,7 @@ config/buildbox-ng:
 	@: $(or $(CROSSTOOLNG_ARCH),$(error CROSSTOOLNG_ARCH variable must be set))
 	@: $(or $(wildcard buildbox/crosstoolng-configs/$(CROSSTOOLNG_ARCH).defconfig),\
 		$(error No config for arch $(CROSSTOOLNG_ARCH)))
-	docker run -it --rm \
+	$(CONTAINER_CLIENT) run -it --rm \
 		--volume $(shell pwd)/..:/home/teleport \
 		--workdir /home/teleport \
 		buildbox-thirdparty-crosstoolng:$(BUILDBOX_VERSION) \
@@ -500,7 +558,7 @@ config/buildbox-ng:
 # not relevant or incorrect for this one.
 .PHONY: enter/buildbox-ng
 enter/buildbox-ng:
-	docker run -it --rm \
+	$(CONTAINER_CLIENT) run -it --rm \
 		--volume $(shell pwd)/..:/home/teleport \
 		--workdir /home/teleport \
 		--user $(shell id -u):$(shell id -g) \
@@ -511,7 +569,7 @@ enter/buildbox-ng:
 #
 .PHONY: enter-root/buildbox-ng
 enter-root/buildbox-ng:
-	docker run -it --rm \
+	$(CONTAINER_CLIENT) run -it --rm \
 		--volume $(shell pwd)/..:/home/teleport \
 		--workdir /home/teleport \
 		--user 0:0 \
@@ -522,7 +580,7 @@ enter-root/buildbox-ng:
 #
 .PHONY: enter/centos7
 enter/centos7: buildbox-centos7
-	docker run $(DOCKERFLAGS) -ti $(NOROOT) \
+	$(CONTAINER_CLIENT) run $(DOCKERFLAGS) -ti $(NOROOT) \
 		-e HOME=$(SRCDIR)/build.assets -w $(SRCDIR) $(BUILDBOX_CENTOS7) /bin/bash
 
 #
@@ -530,7 +588,7 @@ enter/centos7: buildbox-centos7
 #
 .PHONY: enter-root/centos7
 enter-root/centos7: buildbox-centos7
-	docker run $(DOCKERFLAGS) -ti \
+	$(CONTAINER_CLIENT) run $(DOCKERFLAGS) -ti \
 		-e HOME=$(SRCDIR)/build.assets -w $(SRCDIR) $(BUILDBOX_CENTOS7) /bin/bash
 
 #
@@ -538,7 +596,7 @@ enter-root/centos7: buildbox-centos7
 #
 .PHONY:enter/centos7-fips
 enter/centos7-fips: buildbox-centos7-fips
-	docker run $(DOCKERFLAGS) -ti $(NOROOT) \
+	$(CONTAINER_CLIENT) run $(DOCKERFLAGS) -ti $(NOROOT) \
 		-e HOME=$(SRCDIR)/build.assets -w $(SRCDIR) $(BUILDBOX_CENTOS7_FIPS) /bin/bash
 
 #
@@ -546,7 +604,7 @@ enter/centos7-fips: buildbox-centos7-fips
 #
 .PHONY: enter-root/centos7-fips
 enter-root/centos7-fips: buildbox-centos7-fips
-	docker run $(DOCKERFLAGS) -ti \
+	$(CONTAINER_CLIENT) run $(DOCKERFLAGS) -ti \
 		-e HOME=$(SRCDIR)/build.assets -w $(SRCDIR) $(BUILDBOX_CENTOS7_FIPS) /bin/bash
 
 #
@@ -561,12 +619,12 @@ enter/grpcbox: grpcbox
 #
 .PHONY: enter/node
 enter/node: buildbox-node
-	docker run $(DOCKERFLAGS) -ti $(NOROOT) \
+	$(CONTAINER_CLIENT) run $(DOCKERFLAGS) -ti $(NOROOT) \
 		-e HOME=$(SRCDIR)/build.assets -w $(SRCDIR) $(BUILDBOX_NODE) /bin/bash
 
 .PHONY: enter/arm
 enter/arm: buildbox-arm
-	docker run $(DOCKERFLAGS) -ti $(NOROOT) \
+	$(CONTAINER_CLIENT) run $(DOCKERFLAGS) -ti $(NOROOT) \
 		-e HOME=$(SRCDIR)/build.assets -w $(SRCDIR) $(BUILDBOX_ARM) /bin/bash
 
 # #############################################################################
@@ -622,7 +680,7 @@ BUILDBOX_TARGET = $(or $(BUILDBOX_TARGET_$(BUILDBOX)),buildbox)
 release: $(BUILDBOX_TARGET)
 	$(call LOG_GROUP_START)
 	@echo "Build Assets Release"
-	docker run $(DOCKERFLAGS) $(NOROOT) $(BUILDBOX) \
+	$(CONTAINER_CLIENT) run $(DOCKERFLAGS) $(NOROOT) $(BUILDBOX) \
 		/usr/bin/make $(RELEASE_TARGET) -e ADDFLAGS="$(ADDFLAGS)" OS=$(OS) ARCH=$(ARCH) RUNTIME=$(GOLANG_VERSION) FIDO2=$(FIDO2) PIV=$(PIV) REPRODUCIBLE=yes
 	$(call LOG_GROUP_END)
 
@@ -645,7 +703,7 @@ release-ng-arm:
 release-ng: RELEASE_TARGET = release-unix-preserving-webassets
 release-ng: webassets buildbox-ng
 	$(call LOG_GROUP_START)
-	docker run --rm --interactive $(shell test -t 0 && echo --tty) \
+	$(CONTAINER_CLIENT) run --rm --interactive $(shell test -t 0 && echo --tty) \
 		--volume $(shell pwd)/..:/home/teleport \
 		--workdir /home/teleport \
 		--user $(shell id -u):$(shell id -g) \
@@ -668,7 +726,7 @@ release-ng: webassets buildbox-ng
 #
 .PHONY: release-fips
 release-fips: buildbox-centos7 webassets
-	docker run $(DOCKERFLAGS) -i $(NOROOT) $(BUILDBOX_CENTOS7) \
+	$(CONTAINER_CLIENT) run $(DOCKERFLAGS) -i $(NOROOT) $(BUILDBOX_CENTOS7) \
 		/usr/bin/make release-ent -e ADDFLAGS="$(ADDFLAGS)" OS=$(OS) ARCH=$(ARCH) RUNTIME=$(GOLANG_VERSION) FIDO2=$(FIDO2) PIV=$(PIV) FIPS=yes REPRODUCIBLE=yes
 
 #
@@ -685,7 +743,7 @@ release-fips: buildbox-centos7 webassets
 release-centos7: buildbox-centos7 webassets
 	$(call LOG_GROUP_START)
 	$(REQUIRE_HOST_ARCH)
-	docker run $(DOCKERFLAGS) -i $(NOROOT) $(BUILDBOX_CENTOS7) \
+	$(CONTAINER_CLIENT) run $(DOCKERFLAGS) -i $(NOROOT) $(BUILDBOX_CENTOS7) \
 		/usr/bin/scl enable $(DEVTOOLSET) 'make release-unix-preserving-webassets -e ADDFLAGS="$(ADDFLAGS)" OS=$(OS) ARCH=$(ARCH) RUNTIME=$(GOLANG_VERSION) FIDO2=$(FIDO2) PIV=$(PIV) REPRODUCIBLE=no'
 	$(call LOG_GROUP_END)
 
@@ -700,7 +758,7 @@ release-centos7: buildbox-centos7 webassets
 .PHONY: release-centos7-fips
 release-centos7-fips: buildbox-centos7 webassets
 	$(call LOG_GROUP_START)
-	docker run $(DOCKERFLAGS) -i $(NOROOT) $(BUILDBOX_CENTOS7) \
+	$(CONTAINER_CLIENT) run $(DOCKERFLAGS) -i $(NOROOT) $(BUILDBOX_CENTOS7) \
 		/usr/bin/scl enable $(DEVTOOLSET) '/usr/bin/make release-ent -e ADDFLAGS="$(ADDFLAGS)" OS=$(OS) ARCH=$(ARCH) RUNTIME=$(GOLANG_VERSION) FIDO2=$(FIDO2) PIV=$(PIV) FIPS=yes REPRODUCIBLE=no'
 	$(call LOG_GROUP_END)
 
@@ -709,7 +767,7 @@ release-centos7-fips: buildbox-centos7 webassets
 #
 .PHONY:release-windows
 release-windows: buildbox
-	docker run $(DOCKERFLAGS) -i $(NOROOT) $(BUILDBOX) \
+	$(CONTAINER_CLIENT) run $(DOCKERFLAGS) -i $(NOROOT) $(BUILDBOX) \
 		/usr/bin/make release -e ADDFLAGS="$(ADDFLAGS)" OS=windows RUNTIME=$(GOLANG_VERSION) REPRODUCIBLE=yes PIV=yes
 
 #
@@ -717,7 +775,7 @@ release-windows: buildbox
 #
 .PHONY: release-windows-unsigned
 release-windows-unsigned: buildbox
-	docker run $(DOCKERFLAGS) -i $(NOROOT) $(BUILDBOX) \
+	$(CONTAINER_CLIENT) run $(DOCKERFLAGS) -i $(NOROOT) $(BUILDBOX) \
 		/usr/bin/make release-windows-unsigned -e ADDFLAGS="$(ADDFLAGS)" OS=windows RUNTIME=$(GOLANG_VERSION) REPRODUCIBLE=yes PIV=yes
 
 #
@@ -725,11 +783,11 @@ release-windows-unsigned: buildbox
 #
 .PHONY: docsbox
 docsbox:
-	if ! docker inspect --type=image $(DOCSBOX) 2>&1 >/dev/null; then docker pull $(DOCSBOX) || true; fi
+	if ! $(CONTAINER_CLIENT) inspect --type=image $(DOCSBOX) 2>&1 >/dev/null; then $(CONTAINER_CLIENT) pull $(DOCSBOX) || true; fi
 
 .PHONY:test-docs
 test-docs: docsbox
-	docker run -i $(NOROOT) -v $$(pwd)/..:/src/content $(DOCSBOX) \
+	$(CONTAINER_CLIENT) run -i $(NOROOT) -v $$(pwd)/..:/src/content:z $(DOCSBOX) \
 		/bin/sh -c "yarn markdown-lint-external-links"
 
 #
@@ -793,13 +851,13 @@ print-buildbox-version:
 #
 .PHONY: build-centos7-assets
 build-centos7-assets:
-	docker buildx build \
+	$(CONTAINER_BUILD) \
 		--build-arg BUILDARCH=$(HOST_ARCH) \
 		--build-arg DEVTOOLSET=$(DEVTOOLSET) \
 		--build-arg TARGETARCH=$(RUNTIME_ARCH) \
-		--cache-to type=inline \
-		--cache-from $(BUILDBOX_CENTOS7_ASSETS) \
-		$(if $(PUSH),--push,--load) \
+		$(CACHE_TO) \
+		$(if $(CACHE_FROM_FLAG),$(CACHE_FROM_FLAG) $(BUILDBOX_CENTOS7_ASSETS)) \
+		$(if $(PUSH),--push,$(LOAD_FLAG)) \
 		--tag $(BUILDBOX_CENTOS7_ASSETS) \
 		-f Dockerfile-centos7-assets .
 

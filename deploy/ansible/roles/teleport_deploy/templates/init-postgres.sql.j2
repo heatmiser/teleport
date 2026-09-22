@@ -1,0 +1,5 @@
+{{ ansible_managed | comment }}
+ALTER USER {{ teleport_deploy_postgres_user }} WITH REPLICATION;
+CREATE DATABASE teleport_audit WITH OWNER {{ teleport_deploy_postgres_user }};
+GRANT ALL PRIVILEGES ON DATABASE {{ teleport_deploy_postgres_user }} TO {{ teleport_deploy_postgres_user }};
+GRANT ALL PRIVILEGES ON DATABASE teleport_audit TO {{ teleport_deploy_postgres_user }};

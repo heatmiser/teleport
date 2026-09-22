@@ -1,0 +1,20 @@
+[Unit]
+Description=Teleport Auth Service Container (Internal Lab Host)
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image=localhost/teleport:latest
+ContainerName=teleport-auth
+AutoUpdate=registry
+PublishPort=3025:3025
+Volume=/etc/teleport:/etc/teleport:Z
+Volume=/var/lib/teleport:/var/lib/teleport:Z
+Exec=start -c /etc/teleport/teleport-auth.yaml
+
+[Service]
+Restart=always
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target default.target

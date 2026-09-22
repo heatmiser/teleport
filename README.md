@@ -146,9 +146,13 @@ If you have questions, are exploring ideas, or want to sanity-check something, p
 - Enterprise and POC support  
   If you are evaluating Teleport Enterprise or need more responsive support during a POC, we can set up a dedicated Slack channel. You can [reach out to us through our website](https://goteleport.com/contact-sales/) to get started.
 
-## Installing and Running
+## Installing and Deployment Tracks
 
-To set up a single-instance Teleport cluster, follow our [getting started
+Teleport can be deployed using standard single-binary/upstream container options or via an enterprise multi-container RHEL/UBI Quadlet architecture:
+
+### Track 1: Standard Deployment & Upstream Builds
+
+To set up a standard single-instance Teleport cluster, follow our [getting started
 guide](https://goteleport.com/docs/admin-guides/deploy-a-cluster/linux-demo/).
 You can then register your servers, Kubernetes clusters, and other
 infrastructure with your Teleport cluster.
@@ -160,6 +164,17 @@ infrastructure.
 [Sign up for a free trial](https://goteleport.com/signup/) of Teleport
 Enterprise Cloud, and follow this guide to [register your first
 server](https://goteleport.com/docs/get-started/).
+
+### Track 2: RHEL / UBI Enterprise Quadlet Deployment
+
+For production-grade Red Hat Enterprise Linux (RHEL) and Universal Base Image (UBI) environments, this repository provides a containerized **Split Architecture** deployment using Systemd Quadlets, Podman, and Ansible:
+
+- **Split Architecture:** Decouples DMZ Proxy from Private Auth Server and PostgreSQL state backend.
+- **State Backend:** Integrates PostgreSQL 15 with `wal2json` for scalable state and audit trail storage (`pgbk`).
+- **Identity Integration:** Configured out-of-the-box for FreeIPA / Red Hat IdM (LDAPS).
+- **Automation:** Includes full Ansible deployment roles (`deploy/ansible/roles/teleport_deploy`) and Podman Quadlet unit definitions (`deploy/quadlet/`).
+
+For detailed architecture diagrams, container build instructions, and Ansible deployment steps, see the [Teleport Containerized Deployment & Automation Guide](deploy/README.md).
 
 ## Docker
 

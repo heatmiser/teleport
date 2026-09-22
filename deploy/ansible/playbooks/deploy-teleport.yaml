@@ -1,0 +1,31 @@
+---
+- name: "Deploy Teleport PostgreSQL Database"
+  hosts: "postgres"
+  become: true
+  vars:
+    teleport_deploy_role: "postgres"
+  tasks:
+    - name: "Import teleport_deploy role for PostgreSQL"
+      ansible.builtin.import_role:
+        name: "teleport_deploy"
+
+- name: "Deploy Teleport Internal Auth Server"
+  hosts: "teleport_auth"
+  become: true
+  vars:
+    teleport_deploy_role: "auth"
+  tasks:
+    - name: "Import teleport_deploy role for Auth Server"
+      ansible.builtin.import_role:
+        name: "teleport_deploy"
+
+- name: "Deploy Teleport DMZ Proxy Server"
+  hosts: "teleport_proxy"
+  become: true
+  vars:
+    teleport_deploy_role: "proxy"
+  tasks:
+    - name: "Import teleport_deploy role for Proxy Server"
+      ansible.builtin.import_role:
+        name: "teleport_deploy"
+...

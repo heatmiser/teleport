@@ -1,0 +1,13 @@
+---
+teleport_deploy_cluster_name: "teleport.internal.lab"
+teleport_deploy_postgres_host: "postgres.internal.lab"
+teleport_deploy_postgres_port: 5432
+teleport_deploy_postgres_user: "teleport_user"
+
+teleport_deploy_freeipa_host: "idm.internal.lab"
+teleport_deploy_freeipa_bind_dn: "uid=teleport-bind,cn=sysaccounts,cn=etc,dc=internal,dc=lab"
+teleport_deploy_freeipa_base_dn: "cn=users,cn=accounts,dc=internal,dc=lab"
+
+teleport_deploy_container_image: "localhost/teleport:latest"
+teleport_deploy_postgres_image: "localhost/teleport-postgres:latest"
+...

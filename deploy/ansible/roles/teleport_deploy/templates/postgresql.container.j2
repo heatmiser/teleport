@@ -1,0 +1,23 @@
+# {{ ansible_managed }}
+[Unit]
+Description=PostgreSQL Database Container for Teleport State & Audit
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image={{ teleport_deploy_postgres_image }}
+ContainerName=teleport-postgres
+PublishPort={{ teleport_deploy_postgres_port }}:5432
+Environment=POSTGRESQL_USER={{ teleport_deploy_postgres_user }}
+Environment=POSTGRESQL_PASSWORD={{ teleport_deploy_postgres_password }}
+Environment=POSTGRESQL_DATABASE=teleport_state
+Volume=/var/lib/pgsql/data:/var/lib/pgsql/data:Z
+Volume=/etc/teleport/init-postgres.sql:/container-entrypoint-initdb.d/init-postgres.sql:z
+Exec=run-postgresql -c wal_level=logical
+
+[Service]
+Restart=always
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target default.target

@@ -1,0 +1,25 @@
+# {{ ansible_managed }}
+version: v3
+teleport:
+  nodename: "teleport-proxy-dmz"
+  auth_server: "{{ teleport_deploy_auth_host | default('teleport-auth.internal.lab') }}:3025"
+  join_params:
+    token_name: "{{ teleport_deploy_join_token | default('teleport-join-token-secret') }}"
+    method: "token"
+
+proxy_service:
+  enabled: true
+  listen_addr: "0.0.0.0:3022"
+  web_listen_addr: "0.0.0.0:3023"
+  tunnel_listen_addr: "0.0.0.0:3024"
+  # FreeIPA / Red Hat IdM signed TLS certificates
+  https_keypairs:
+    - cert_file: "/etc/teleport/certs/proxy-web.crt"
+      key_file: "/etc/teleport/certs/proxy-web.key"
+
+auth_service:
+  enabled: false
+
+ssh_service:
+  enabled: false
+...
