@@ -1,0 +1,40 @@
+# Stage 1: Build base with UBI minimal
+FROM registry.access.redhat.com/ubi9/ubi-minimal:latest
+
+LABEL name="teleport" \
+      vendor="Teleport" \
+      maintainer="Teleport Authors" \
+      summary="Teleport Access Plane Container" \
+      description="Teleport is an identity-aware, multi-protocol access proxy and Certificate Authority."
+
+# Install required dependencies
+RUN microdnf update -y && \
+    microdnf install -y ca-certificates shadow-utils tar gzip findutils && \
+    microdnf clean all
+
+# Create teleport user and directory structure
+RUN groupadd -g 10007 teleport && \
+    useradd -u 10007 -g 10007 -m -d /var/lib/teleport -s /bin/false teleport && \
+    mkdir -p /etc/teleport /var/lib/teleport && \
+    chown -R 10007:10007 /etc/teleport /var/lib/teleport
+
+# Copy built Teleport binaries
+COPY build/teleport /usr/local/bin/teleport
+COPY build/tsh /usr/local/bin/tsh
+COPY build/tctl /usr/local/bin/tctl
+COPY build/tbot /usr/local/bin/tbot
+
+# Expose Teleport default ports
+# 3022: SSH Proxy
+# 3023: Proxy Web UI & API
+# 3024: Reverse Tunnel Port
+# 3025: Auth Server API
+EXPOSE 3022 3023 3024 3025
+
+VOLUME ["/etc/teleport", "/var/lib/teleport"]
+
+USER 10007:10007
+
+STOPSIGNAL SIGQUIT
+
+ENTRYPOINT ["/usr/local/bin/teleport", "start", "-c", "/etc/teleport/teleport.yaml"]

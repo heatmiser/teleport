@@ -42,7 +42,7 @@ TELEPORT_DEBUG ?= false
 GITTAG=v$(VERSION)
 CGOFLAG ?= CGO_ENABLED=1
 KUSTOMIZE_NO_DYNAMIC_PLUGIN ?= kustomize_disable_go_plugin_support
-KUBECTL_VERSION := $(shell go list -m -f '{{.Version}}' k8s.io/kubectl | sed 's/v0/v1/')
+KUBECTL_VERSION := $(shell go list -m -f '{{.Version}}' k8s.io/kubectl 2>/dev/null | sed 's/v0/v1/')
 KUBECTL_SETVERSION := -X k8s.io/component-base/version.gitVersion=$(KUBECTL_VERSION)
 
 # RELEASE_DIR is where the release artifacts (tarballs, pacakges, etc) are put. It
@@ -64,10 +64,10 @@ BUILDFLAGS_TBOT ?= $(ADDFLAGS) -ldflags '$(GO_LDFLAGS)' -trimpath -buildvcs=fals
 BUILDFLAGS_TELEPORT_UPDATE ?= $(ADDFLAGS) -ldflags '$(GO_LDFLAGS)' -trimpath -buildvcs=false
 endif
 
-GO_ENV_OS := $(shell go env GOOS)
+GO_ENV_OS := $(shell go env GOOS 2>/dev/null)
 OS ?= $(GO_ENV_OS)
 
-GO_ENV_ARCH := $(shell go env GOARCH)
+GO_ENV_ARCH := $(shell go env GOARCH 2>/dev/null)
 ARCH ?= $(GO_ENV_ARCH)
 
 FIPS ?=

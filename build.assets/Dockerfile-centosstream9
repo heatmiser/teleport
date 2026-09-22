@@ -1,0 +1,85 @@
+# syntax=docker/dockerfile:1
+FROM quay.io/centos/centos:stream9 AS buildbox
+
+ARG BUILDARCH
+ARG TARGETARCH
+
+# Set up locale
+ENV LANGUAGE=en_US.UTF-8 \
+    LANG=en_US.UTF-8 \
+    LC_ALL=en_US.UTF-8 \
+    LC_CTYPE=en_US.UTF-8
+
+# Create build user matching UID/GID from host
+ARG UID=1000
+ARG GID=1000
+RUN (groupadd ci --gid=$GID -o 2>/dev/null || true) && \
+    (useradd ci --uid=$UID --gid=$GID --create-home --shell=/bin/bash 2>/dev/null || true) && \
+    mkdir -p -m0700 /var/lib/teleport && chown -R $UID:$GID /var/lib/teleport
+
+# Enable CRB and EPEL 9 for devel packages (libfido2-devel, etc.)
+RUN dnf install -y epel-release && \
+    dnf config-manager --set-enabled crb && \
+    dnf update -y && \
+    dnf install -y --allowerasing \
+        gcc \
+        gcc-c++ \
+        clang \
+        llvm \
+        make \
+        cmake \
+        git \
+        tar \
+        gzip \
+        zip \
+        unzip \
+        xz \
+        which \
+        diffutils \
+        findutils \
+        pkgconfig \
+        pam-devel \
+        elfutils-libelf-devel \
+        zlib-devel \
+        libfido2-devel \
+        systemd-devel \
+        ca-certificates \
+        curl && \
+    dnf clean all
+
+# Install Go
+ARG GOLANG_VERSION=go1.26.7
+RUN mkdir -p /opt && cd /opt && \
+    GO_ARCH=$(if [ "$TARGETARCH" = "amd64" ]; then echo "amd64"; elif [ "$TARGETARCH" = "arm64" ]; then echo "arm64"; else echo "$TARGETARCH"; fi) && \
+    curl -fsSL https://go.dev/dl/${GOLANG_VERSION}.linux-${GO_ARCH}.tar.gz | tar xz && \
+    mkdir -p /go/src/github.com/gravitational/teleport && \
+    chmod -R a+rw /go /opt/go
+
+ENV GOPATH="/go" \
+    PATH="/opt/go/bin:/go/bin:${PATH}"
+
+# Install Rust
+ARG RUST_VERSION=1.94.0
+ENV RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo \
+    PATH=/usr/local/cargo/bin:${PATH} \
+    RUST_VERSION=$RUST_VERSION
+
+RUN mkdir -p $RUSTUP_HOME $CARGO_HOME && \
+    chmod -R a+rw $RUSTUP_HOME $CARGO_HOME && \
+    curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain $RUST_VERSION && \
+    rustup target add wasm32-unknown-unknown && \
+    chmod -R a+rw $RUSTUP_HOME $CARGO_HOME
+
+# Install Node.js (for webassets compilation)
+ARG NODE_VERSION=24.19.0
+RUN mkdir -p /opt/node && cd /opt/node && \
+    NODE_ARCH=$(if [ "$TARGETARCH" = "amd64" ]; then echo "x64"; elif [ "$TARGETARCH" = "arm64" ]; then echo "arm64"; else echo "$TARGETARCH"; fi) && \
+    curl -fsSL https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${NODE_ARCH}.tar.xz | tar xJ --strip-components=1 && \
+    chmod -R a+rw /opt/node
+
+ENV PATH="/opt/node/bin:${PATH}"
+RUN corepack enable pnpm
+
+USER ci
+WORKDIR /go/src/github.com/gravitational/teleport

@@ -1,0 +1,22 @@
+[Unit]
+Description=PostgreSQL Database Container for Teleport State & Audit
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image=localhost/teleport-postgres:latest
+ContainerName=teleport-postgres
+PublishPort=5432:5432
+Environment=POSTGRESQL_USER=teleport_user
+Environment=POSTGRESQL_PASSWORD=${POSTGRESQL_PASSWORD}
+Environment=POSTGRESQL_DATABASE=teleport_state
+Volume=/var/lib/pgsql/data:/var/lib/pgsql/data:Z
+Volume=/etc/teleport/init-postgres.sql:/container-entrypoint-initdb.d/init-postgres.sql:z
+Exec=run-postgresql -c wal_level=logical
+
+[Service]
+Restart=always
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target default.target

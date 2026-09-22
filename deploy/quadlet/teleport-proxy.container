@@ -1,0 +1,21 @@
+[Unit]
+Description=Teleport Proxy Service Container (DMZ Host)
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image=localhost/teleport:latest
+ContainerName=teleport-proxy
+AutoUpdate=registry
+PublishPort=3022:3022
+PublishPort=3023:3023
+PublishPort=3024:3024
+Volume=/etc/teleport:/etc/teleport:Z
+Exec=start -c /etc/teleport/teleport-proxy.yaml
+
+[Service]
+Restart=always
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target default.target

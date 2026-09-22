@@ -1,0 +1,43 @@
+version: v3
+teleport:
+  nodename: "teleport-auth-internal"
+  data_dir: "/var/lib/teleport"
+
+  # PostgreSQL State Storage Backend
+  storage:
+    type: "postgresql"
+    conn_string: "postgres://teleport_user:${POSTGRES_PASSWORD}@postgres.internal.lab:5432/teleport_state?sslmode=verify-full"
+    tls_ca_file: "/etc/teleport/certs/freeipa-ca.crt"
+    tls_cert_file: "/etc/teleport/certs/auth-db.crt"
+    tls_key_file: "/etc/teleport/certs/auth-db.key"
+
+  # PostgreSQL Audit Log Backend
+  audit_log:
+    type: "postgresql"
+    conn_string: "postgres://teleport_user:${POSTGRES_PASSWORD}@postgres.internal.lab:5432/teleport_audit?sslmode=verify-full"
+    tls_ca_file: "/etc/teleport/certs/freeipa-ca.crt"
+    tls_cert_file: "/etc/teleport/certs/auth-db.crt"
+    tls_key_file: "/etc/teleport/certs/auth-db.key"
+
+auth_service:
+  enabled: true
+  cluster_name: "teleport.internal.lab"
+  listen_addr: "0.0.0.0:3025"
+  tokens:
+    - "proxy,node:teleport-join-token-secret"
+
+  # Primary Authentication Connector: FreeIPA / Red Hat IdM
+  authentication:
+    type: "ldap"
+    second_factor: "on"
+    webauthn:
+      rp_id: "teleport.internal.lab"
+
+proxy_service:
+  enabled: false
+
+ssh_service:
+  enabled: true
+  labels:
+    role: "auth-host"
+...

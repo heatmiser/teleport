@@ -1,0 +1,16 @@
+---
+- name: "Main | Include PostgreSQL deployment tasks"
+  ansible.builtin.include_tasks: "postgres.yaml"
+  when:
+    - "'postgres' in group_names or teleport_deploy_role == 'postgres'"
+
+- name: "Main | Include Teleport Auth deployment tasks"
+  ansible.builtin.include_tasks: "auth.yaml"
+  when:
+    - "'teleport_auth' in group_names or teleport_deploy_role == 'auth'"
+
+- name: "Main | Include Teleport Proxy deployment tasks"
+  ansible.builtin.include_tasks: "proxy.yaml"
+  when:
+    - "'teleport_proxy' in group_names or teleport_deploy_role == 'proxy'"
+...

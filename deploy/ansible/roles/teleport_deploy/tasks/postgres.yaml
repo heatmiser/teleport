@@ -1,0 +1,32 @@
+---
+- name: "Postgres | Ensure configuration and data directories exist"
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - "/etc/teleport"
+    - "/var/lib/pgsql/data"
+    - "/etc/containers/systemd"
+
+- name: "Postgres | Template database initialization script"
+  ansible.builtin.template:
+    src: "init-postgres.sql.j2"
+    dest: "/etc/teleport/init-postgres.sql"
+    mode: "0600"
+    backup: true
+
+- name: "Postgres | Template PostgreSQL Quadlet unit file"
+  ansible.builtin.template:
+    src: "postgresql.container.j2"
+    dest: "/etc/containers/systemd/teleport-postgres.container"
+    mode: "0644"
+    backup: true
+
+- name: "Postgres | Ensure PostgreSQL systemd service is started and enabled"
+  ansible.builtin.systemd_service:
+    name: "teleport-postgres.service"
+    state: started
+    enabled: true
+    daemon_reload: true
+...

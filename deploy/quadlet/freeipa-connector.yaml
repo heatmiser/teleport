@@ -1,0 +1,36 @@
+kind: "ldap"
+version: v2
+metadata:
+  name: "freeipa"
+spec:
+  # FreeIPA / Red Hat IdM LDAPS Host
+  addr: "idm.internal.lab:636"
+  server_name: "idm.internal.lab"
+  insecure: false
+  root_ca_pool: "/etc/teleport/certs/freeipa-ca.crt"
+
+  # Service Account for Directory Queries
+  bind_dn: "uid=teleport-bind,cn=sysaccounts,cn=etc,dc=internal,dc=lab"
+  secret_meta:
+    path: "/etc/teleport/secrets/freeipa-bind-password"
+
+  # User & Group Search Settings
+  user_search:
+    base_dn: "cn=users,cn=accounts,dc=internal,dc=lab"
+    filter: "(uid={user})"
+    attribute_mapping:
+      username: "uid"
+      name: "cn"
+      email: "mail"
+
+  # Mapping FreeIPA POSIX Groups to Teleport RBAC Roles
+  group_to_roles:
+    - group: "teleport-admins"
+      roles:
+        - "access"
+        - "editor"
+        - "auditor"
+    - group: "teleport-users"
+      roles:
+        - "access"
+...

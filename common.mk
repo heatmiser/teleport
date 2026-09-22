@@ -24,7 +24,7 @@ BPF_MESSAGE := without-BPF-support
 # Is this build targeting the same OS & architecture it is being compiled on, or
 # will it require cross-compilation? We need to know this (especially for ARM) so we
 # can set the cross-compiler path (and possibly feature flags) correctly.
-IS_NATIVE_BUILD ?= $(filter $(ARCH),$(shell go env GOARCH))
+IS_NATIVE_BUILD ?= $(filter $(ARCH),$(shell go env GOARCH 2>/dev/null))
 IS_CROSS_COMPILE_BB = $(filter $(BUILDBOX_MODE),cross)
 
 # Only build with BPF for linux/amd64 and linux/arm64.
